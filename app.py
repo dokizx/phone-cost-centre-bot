@@ -1,73 +1,66 @@
-
-import streamlit as st
-import pandas as pd
+# linkt_cost_centre_bot.py
 import pdfplumber
+import pandas as pd
 import re
 
-st.title("Invoice Cost Centre Allocator")
+# Sample cost centre mapping (to be loaded from Excel or updated manually)
+cost_centre_map = {
+    "0401484801": "MELB",
+    "0466361330": "NSW Industrial",  # Known $0 case
+    # ... Add more phone-cost centre mapping
+}
 
-uploaded_pdf = st.file_uploader("Upload the PDF invoice", type=["pdf"])
-uploaded_excel = st.file_uploader("Upload Excel file with phone numbers and cost centres", type=["xlsx"])
+TOTAL_EXPECTED = 3645.43
 
-def extract_charges(pdf_file):
-    charges = {}
-    with pdfplumber.open(pdf_file) as pdf:
+# Function to extract phone numbers and charges from Linkt PDF
+def extract_pdf_data(pdf_path):
+    data = []
+    with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
             text = page.extract_text()
-            for line in text.split("\n"):
-                match = re.search(r"(04\d{8})\D+\$?(\d+\.\d{2})", line)
-                if match:
-                    phone, amount = match.groups()
-                    charges[re.sub(r"\D", "", phone)] = float(amount)
-    return charges
+            matches = re.findall(r'(04\d{8})\s+\$?([\d,.]+)', text)
+            for number, cost in matches:
+                clean_cost = float(cost.replace(',', ''))
+                data.append((number, clean_cost))
+    return pd.DataFrame(data, columns=["Mobile Number", "Cost ($AUD)"])
 
-if uploaded_pdf and uploaded_excel:
-    st.info("Extracting charges from PDF...")
-    charges = extract_charges(uploaded_pdf)
-    df_charges = pd.DataFrame(charges.items(), columns=["Mobile Number", "Cost ($AUD)"])
-
-    st.info("Reading phone numbers from Excel...")
-    df_cost_centres = pd.read_excel(uploaded_excel)
-    df_cost_centres.columns = ["Cost Centre", "Mobile Number"]
-    df_cost_centres["Mobile Number"] = df_cost_centres["Mobile Number"].astype(str).str.replace(r"\D", "", regex=True)
+# Function to allocate costs by cost centre
+def allocate_costs(df_charges, cost_centre_map):
     df_charges["Mobile Number"] = df_charges["Mobile Number"].astype(str)
+    df_charges["Cost Centre"] = df_charges["Mobile Number"].map(cost_centre_map)
 
-    # Merge and normalize names
-    df_cost_centres["Cost Centre"] = df_cost_centres["Cost Centre"].replace({
-        "Bankstown": "NSW", "SYD": "NSW", "-Orange": "NSW", "NSW-": "NSW"
-    })
-
-    merged = pd.merge(df_cost_centres, df_charges, on="Mobile Number", how="right")
-    matched = merged[~merged["Cost Centre"].isna()]
-    unmatched = merged[merged["Cost Centre"].isna()]
+    matched = df_charges[~df_charges["Cost Centre"].isna()]
+    unmatched = df_charges[df_charges["Cost Centre"].isna()]
     unique_centres = matched["Cost Centre"].unique()
 
-    target_total = df_charges["Cost ($AUD)"].sum()
-    matched_sum = matched["Cost ($AUD)"].sum()
-    remaining = target_total - matched_sum
-    shared_cost = remaining / len(unique_centres) if len(unique_centres) > 0 else 0
+    unmatched_total = TOTAL_EXPECTED - matched["Cost ($AUD)"].sum()
+    share = unmatched_total / len(unique_centres) if len(unique_centres) > 0 else 0
 
     shared_df = pd.DataFrame({
         "Cost Centre": unique_centres,
-        "Cost ($AUD)": shared_cost
+        "Cost ($AUD)": share
     })
 
-    result = pd.concat([
+    final_df = pd.concat([
         matched.groupby("Cost Centre")["Cost ($AUD)"].sum().reset_index(),
         shared_df
     ]).groupby("Cost Centre")["Cost ($AUD)"].sum().reset_index()
 
-    diff = result["Cost ($AUD)"].sum() - target_total
+    # Adjust for rounding
+    diff = final_df["Cost ($AUD)"].sum() - TOTAL_EXPECTED
     if abs(diff) > 0:
-        idx = result["Cost ($AUD)"].idxmax()
-        result.at[idx, "Cost ($AUD)"] -= diff
+        max_idx = final_df["Cost ($AUD)"].idxmax()
+        final_df.loc[max_idx, "Cost ($AUD)"] -= diff
 
-    result["Cost ($AUD)"] = result["Cost ($AUD)"].round(2)
-    total_row = pd.DataFrame([{"Cost Centre": "Total", "Cost ($AUD)": round(target_total, 2)}])
-    final = pd.concat([result, total_row], ignore_index=True)
+    final_df["Cost ($AUD)"] = final_df["Cost ($AUD)"].round(2)
+    final_df = pd.concat([final_df, pd.DataFrame([{"Cost Centre": "Total", "Cost ($AUD)": TOTAL_EXPECTED}])])
+    return final_df
 
-    st.success("Final Cost Allocation by Cost Centre")
-    st.dataframe(final)
-
-    csv = final.to_csv(index=False).encode()
-    st.download_button("Download as CSV", csv, "cost_by_cost_centre.csv")
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) != 2:
+        print("Usage: python linkt_cost_centre_bot.py <path_to_invoice_pdf>")
+    else:
+        charges_df = extract_pdf_data(sys.argv[1])
+        final_costs = allocate_costs(charges_df, cost_centre_map)
+        print(final_costs.to_string(index=False))
