@@ -10,8 +10,6 @@ cost_centre_map = {
     # ... Add more phone-cost centre mapping
 }
 
-TOTAL_EXPECTED = 3645.43
-
 # Function to extract phone numbers and charges from Linkt PDF
 def extract_pdf_data(pdf_path):
     data = []
@@ -33,7 +31,8 @@ def allocate_costs(df_charges, cost_centre_map):
     unmatched = df_charges[df_charges["Cost Centre"].isna()]
     unique_centres = matched["Cost Centre"].unique()
 
-    unmatched_total = TOTAL_EXPECTED - matched["Cost ($AUD)"].sum()
+    total_cost = df_charges["Cost ($AUD)"].sum()
+    unmatched_total = total_cost - matched["Cost ($AUD)"].sum()
     share = unmatched_total / len(unique_centres) if len(unique_centres) > 0 else 0
 
     shared_df = pd.DataFrame({
@@ -47,13 +46,13 @@ def allocate_costs(df_charges, cost_centre_map):
     ]).groupby("Cost Centre")["Cost ($AUD)"].sum().reset_index()
 
     # Adjust for rounding
-    diff = final_df["Cost ($AUD)"].sum() - TOTAL_EXPECTED
+    diff = final_df["Cost ($AUD)"].sum() - total_cost
     if abs(diff) > 0:
         max_idx = final_df["Cost ($AUD)"].idxmax()
         final_df.loc[max_idx, "Cost ($AUD)"] -= diff
 
     final_df["Cost ($AUD)"] = final_df["Cost ($AUD)"].round(2)
-    final_df = pd.concat([final_df, pd.DataFrame([{"Cost Centre": "Total", "Cost ($AUD)": TOTAL_EXPECTED}])])
+    final_df = pd.concat([final_df, pd.DataFrame([{"Cost Centre": "Total", "Cost ($AUD)": round(total_cost, 2)}])])
     return final_df
 
 if __name__ == "__main__":
