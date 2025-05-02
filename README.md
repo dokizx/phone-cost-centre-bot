@@ -1,7 +1,7 @@
 
-# Phone Cost Centre Allocator
+# Phone Invoice Reader Bot
 
-Upload an Excel file with mobile numbers and cost centres. The app calculates total cost per centre based on fixed charges.
+This Streamlit app reads PDF invoices and extracts mobile numbers and their costs.
 
 ## How to Run
 
